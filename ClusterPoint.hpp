@@ -310,6 +310,12 @@ public:
         return str;
     }
 
+    /**
+     * @brief Checks if this point is assigned to at least 1 same cluster as other point.
+     * @param other The point to be compared with.
+     * @return True if points share at least 1 same cluster, false otherwise.
+     */
+    bool assignedToTheSameCluster(const ClusterPoint<T, U> &other) const;
 };
 
 //------------------------------------- IMPLEMENTATION ----------------------------------------
@@ -551,6 +557,22 @@ template<class T, class U>
 U ClusterPoint<T, U>::getTriangularInequalityDistance() const
 {
     return ti_distance;
+}
+
+template<class T, class U>
+bool ClusterPoint<T, U>::assignedToTheSameCluster(const ClusterPoint<T, U> &other) const
+{
+    if(this == &other) {
+        return true;
+    }
+    for(auto cluster_id : cluster_ids) {
+        for(auto other_cluster_id : other.cluster_ids) {
+            if(cluster_id == other_cluster_id) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 #endif //DBSCAN_CLUSTERPOINT_HPP

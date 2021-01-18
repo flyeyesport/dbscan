@@ -150,7 +150,7 @@ int main(int argc, char **argv)
 
     if(dim == 2) {
         DBSCAN<double, 2> dbscan(2, 1, euclidean_distance);
-        vector<DataPoint<double, 2>> data;
+        vector<pair<DataPoint<double, 2>, vector<int>>> data;
         if(!dbscan.readData(vm["input-file"].as<string>(), vm["name"].as<string>(), data)) {
             cout << "Error while reading data." << endl;
             return 1;
@@ -194,7 +194,7 @@ int main(int argc, char **argv)
         dbscan.findClusters(data);
     } else if(dim == 16) {
         DBSCAN<double, 16> dbscan(2, 1, euclidean_distance);
-        vector<DataPoint<double, 16>> data;
+        vector<pair<DataPoint<double, 16>, vector<int>>> data;
         if(!dbscan.readData(vm["input-file"].as<string>(), vm["name"].as<string>(), data)) {
             cout << "Error while reading data." << endl;
             return 1;

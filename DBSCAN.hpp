@@ -252,7 +252,7 @@ protected:
      * @return A set of extended data points ready to be used by clustering algorithm. This extension allows labeling
      * of points.
      */
-    vector<ClusterPoint<DataPoint<T, Dim>, T>> buildIndex(const vector<DataPoint<T, Dim>> &data);
+    vector<ClusterPoint<DataPoint<T, Dim>, T>> buildIndex(const vector<pair<DataPoint<T, Dim>, vector<int>>> &data);
 
     /**
      * @brief Internal method that saves results of the clustering algorithm into 2 files:
@@ -262,12 +262,33 @@ protected:
      *   (or -1 for noise points).
      * - a txt file with some of the satistics of and configuration parameters used by the clustering algorithm.
      * @param points Processed and clusterd points to be saved.
+     * @param rand_index Rand index to be saved in stat file.
+     * @param rand_tp Count of pairs that were in the same cluster in result and ground truth sets to be saved in stat
+     * file.
+     * @param rand_tn Count of pairs that were in other clusters in result and ground truth sets to be saved in stat
+     * file.
+     * @param rand_all Count of all pairs in ground truth set to be saved in stat file.
      * @param reading_input_file_time Duration of the reading process of data from file. It is saved in statistics text
      * file.
      * @param clustering_time Duration of the clustering process. It is saved in statistics text file.
      */
-    void save(const vector<ClusterPoint<DataPoint<T, Dim>, T>> &points, duration<double> reading_input_file_time,
+    void save(const vector<ClusterPoint<DataPoint<T, Dim>, T>> &points, double rand_index,
+              int rand_tp, int rand_tn, int rand_all, duration<double> reading_input_file_time,
               duration<double> clustering_time);
+
+    /**
+     * @brief Calculates Rand index. It also sorts results and adds to the results points that were removed before
+     * clustering because they were zeros.
+     * @param data Set with ground truth data.
+     * @param points Result set. It will be sorted by this method.
+     * @param rand_tp Returned count of pairs that were in the same cluster in result and ground truth sets.
+     * @param rand_tn Returned count of pairs that were in other clusters in result and ground truth sets.
+     * @param rand_all Returned count of all pairs in ground truth set.
+     * @return Rand index.
+     */
+    double sortResultsAndCalculateRandIndex(const vector<pair<DataPoint<T, Dim>, vector<int>>> &data,
+                                            vector<ClusterPoint<DataPoint<T, Dim>, T>> &points, int &rand_tp,
+                                            int &rand_tn, int &rand_all);
 
     /**
      * @brief Helper method which creates a structre of a point (RPoint) used in R*-tree index. It is compiled only for
@@ -311,6 +332,7 @@ protected:
     /**
      * @brief Internal method which sets <b>min_neighbours</b> to 5 and guesses the value of <b>eps</b>.
      * @param data Set of points to be to calculate best <b>eps</b>.
+     * @param data Set of points to be to calculate best <b>eps</b>.
      * @return True if operation was successful, false otherwise.
      */
     bool guessEpsilon(vector<ClusterPoint<DataPoint<T, Dim>, T>> &data);
@@ -351,17 +373,18 @@ public:
      * (original index, values of all dimensions, number of comparisons with other data points, class: noise, core
      * point, border point), and cluster number (or -1 for noise points).
      */
-    vector<ClusterPoint<DataPoint<T, Dim>, T>> findClusters(const vector<DataPoint<T, Dim>> &data);
+    vector<ClusterPoint<DataPoint<T, Dim>, T>> findClusters(const vector<pair<DataPoint<T, Dim>, vector<int>>> &data);
 
     /**
      * @brief Reads data points from file. Each point is represented by a line in the file. Each line must have the
      * same number of values delimited by commas.
      * @param file_name Path to the file with data.
      * @param dataset_name A name of the dataset to be used to construct distinguishable file names with results.
-     * @param data Returned list of data points.
+     * @param data Returned list of pairs of data point and ground truth cluster index.
      * @return True if operation was successful, false otherwise.
      */
-    bool readData(const string &file_name, const string &dataset_name, vector<DataPoint<T, Dim>> &data);
+    bool
+    readData(const string &file_name, const string &dataset_name, vector<pair<DataPoint<T, Dim>, vector<int>>> &data);
 
     /**
      * @brief Sets an internal flag to use a R*-tree index. All other indexes are switched off. Notice that this index
@@ -510,7 +533,7 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::DBSCAN(int min_neighbours, double eps,
 
 template<class T, int Dim, size_t RStarMaxNodeElements>
 vector<ClusterPoint<DataPoint<T, Dim>, T>>
-DBSCAN<T, Dim, RStarMaxNodeElements>::buildIndex(const vector<DataPoint<T, Dim>> &data)
+DBSCAN<T, Dim, RStarMaxNodeElements>::buildIndex(const vector<pair<DataPoint<T, Dim>, vector<int>>> &data)
 {
     vector<ClusterPoint<DataPoint<T, Dim>, T>> result;
     if(data.empty()) {
@@ -525,10 +548,11 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::buildIndex(const vector<DataPoint<T, Dim>>
 
     int j = 0;
     for(int i = 0; i < (int) data.size(); i++) {
-        if(!treat_zero_as_noise || !data[i].isZero()) {
-            result.emplace_back(j++, i, &(data[i]));
+        const auto &point = data[i].first;
+        if(!treat_zero_as_noise || !point.isZero()) {
+            result.emplace_back(j++, i, &(point));
         } else {
-            zeros.emplace_back(i, &(data[i]));
+            zeros.emplace_back(i, &(point));
         }
     }
 
@@ -690,15 +714,79 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::expandCluster(vector<ClusterPoint<DataPoin
 
 template<class T, int Dim, size_t RStarMaxNodeElements>
 vector<ClusterPoint<DataPoint<T, Dim>, T>>
-DBSCAN<T, Dim, RStarMaxNodeElements>::findClusters(const vector<DataPoint<T, Dim>> &data)
+DBSCAN<T, Dim, RStarMaxNodeElements>::findClusters(const vector<pair<DataPoint<T, Dim>, vector<int>>> &data)
 {
     auto result = buildIndex(data);
     auto start = high_resolution_clock::now();
     findClusters(result);
     auto stop = high_resolution_clock::now();
     auto clustering_duration = stop - start;
-    save(result, reading_input_file_time, clustering_duration);
+    int rand_tp, rand_tn, rand_all;
+    auto rand_index = sortResultsAndCalculateRandIndex(data, result, rand_tp, rand_tn, rand_all);
+    save(result, rand_index, rand_tp, rand_tn, rand_all, reading_input_file_time, clustering_duration);
     return result;
+}
+
+template<class T, int Dim, size_t RStarMaxNodeElements>
+double
+DBSCAN<T, Dim, RStarMaxNodeElements>::sortResultsAndCalculateRandIndex(const vector<pair<DataPoint<T, Dim>, vector<int>>> &data,
+                                                                       vector<ClusterPoint<DataPoint<T, Dim>, T>> &points,
+                                                                       int &rand_tp, int &rand_tn, int &rand_all)
+{
+    for(const auto &zero : zeros) {
+        points.emplace_back(-1, zero.first, zero.second);
+    }
+    sort(points.begin(), points.end(),
+         [](const ClusterPoint<DataPoint<T, Dim>, T> &lhs, const ClusterPoint<DataPoint<T, Dim>, T> &rhs) -> bool {
+             return lhs.getOriginalDataIndex() < rhs.getOriginalDataIndex();
+         });
+
+    int same_in_both = 0;
+    int same_in_data_other_in_points = 0;
+    int other_in_data_same_in_points = 0;
+    int other_in_both = 0;
+
+    for(unsigned int i = 0; i < points.size(); i++) {
+        for(unsigned int j = i + 1; j < points.size(); j++) {
+            bool same_in_data;
+            if(border_points_in_many_clusters) {
+                same_in_data = false;
+                unsigned int k = 0;
+                while(!same_in_data && k < data[i].second.size()) {
+                    unsigned int l = 0;
+                    const auto &d1 = data[i].second[k];
+                    while(!same_in_data && l < data[j].second.size()) {
+                        const auto &d2 = data[j].second[l];
+                        if(d1 == d2) {
+                            same_in_data = true;
+                        }
+                        l++;
+                    }
+                    k++;
+                }
+            } else {
+                same_in_data = data[i].second[0] == data[j].second[0];
+            }
+            if(same_in_data) {
+                if(points[i].assignedToTheSameCluster(points[j])) {
+                    same_in_both++;
+                } else {
+                    same_in_data_other_in_points++;
+                }
+            } else {
+                if(points[i].assignedToTheSameCluster(points[j])) {
+                    other_in_data_same_in_points++;
+                } else {
+                    other_in_both++;
+                }
+            }
+        }
+    }
+
+    rand_tp = same_in_both;
+    rand_tn = other_in_both;
+    rand_all = same_in_both + other_in_both + same_in_data_other_in_points + other_in_data_same_in_points;
+    return (double(rand_tp + rand_tn)) / rand_all;
 }
 
 template<class T, int Dim, size_t RStarMaxNodeElements>
@@ -715,7 +803,8 @@ void DBSCAN<T, Dim, RStarMaxNodeElements>::findClusters(vector<ClusterPoint<Data
     for(int i = 0; i < (int) data.size(); i++) {
         if(data[i].isUndefined()) {
             auto neighbours = regionQuery(data, i);
-            if((int) neighbours.size() < min_neighbours - 1) { //we don't have i-th point in the neighbours set, so subtract 1
+            if((int) neighbours.size() <
+               min_neighbours - 1) { //we don't have i-th point in the neighbours set, so subtract 1
                 data[i].setNoise();
             } else {
                 expandCluster(data, i, neighbours, cluster_number++);
@@ -791,7 +880,8 @@ bool DBSCAN<T, Dim, RStarMaxNodeElements>::closeEnough(ClusterPoint<DataPoint<T,
 
 template<class T, int Dim, size_t RStarMaxNodeElements>
 void
-DBSCAN<T, Dim, RStarMaxNodeElements>::save(const vector<ClusterPoint<DataPoint<T, Dim>, T>> &points,
+DBSCAN<T, Dim, RStarMaxNodeElements>::save(const vector<ClusterPoint<DataPoint<T, Dim>, T>> &points, double rand_index,
+                                           int rand_tp, int rand_tn, int rand_all,
                                            duration<double> reading_input_file_time, duration<double> clustering_time)
 {
     auto start = high_resolution_clock::now();
@@ -809,7 +899,7 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::save(const vector<ClusterPoint<DataPoint<T
 
     stringstream eps_oss;
     eps_oss.setf(ios::fixed);
-    eps_oss.precision(2);
+    eps_oss.precision(8);
     eps_oss << eps;
 
     string common_name_part = counter_oss.str() + "_" + method_name + "_" + dataset_name + "_D" +
@@ -831,13 +921,6 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::save(const vector<ClusterPoint<DataPoint<T
 
     for(auto &point : points) {
         out << point;
-    }
-    for(auto &zero : zeros) {
-        out << zero.first << ", " << *(zero.second);
-        if(normalize_values || calculate_z_score) {
-            out << ", " << zero.first << ", " << *(zero.second);
-        }
-        out << ", 0, -1, -1" << endl;
     }
     auto stop = high_resolution_clock::now();
     duration<double> save_duration = stop - start;
@@ -878,7 +961,7 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::save(const vector<ClusterPoint<DataPoint<T
          << (treat_zero_as_noise ? " - zero vectors treated as noise\n" : "")
          << "name of the input file:\t\t\t\t\t\t\t\t" << input_file_name << endl
          << "# of dimensions of a point:\t\t\t\t\t\t\t" << Dim << endl
-         << "# of points in the input file:\t\t\t\t\t\t\t" << points.size() + zeros.size() << endl
+         << "# of points in the input file:\t\t\t\t\t\t\t" << points.size() << endl
          << "Eps:\t\t\t\t\t\t\t\t\t\t" << eps << endl
          << "minPts:\t\t\t\t\t\t\t\t\t\t" << min_neighbours << endl
          << "values of dimensions of a reference point:\t\t\t\t\t" << ti_center << endl
@@ -897,6 +980,10 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::save(const vector<ClusterPoint<DataPoint<T
          << "# of discovered noise points:\t\t\t\t\t\t\t" << noise_points_count << endl
          << "# of discovered core points:\t\t\t\t\t\t\t" << core_points_count << endl
          << "# of discovered border points:\t\t\t\t\t\t\t" << border_points_count << endl
+         << "Rand # pairs in same clusters:\t\t\t\t\t\t\t" << rand_tp << endl
+         << "Rand # pairs in other clusters:\t\t\t\t\t\t\t" << rand_tn << endl
+         << "Rand # all pairs:\t\t\t\t\t\t\t\t" << rand_all << endl
+         << "Rand index:\t\t\t\t\t\t\t\t\t" << rand_index << endl
          << "avg # of calculations of distance/similarity of a point to other points:\t"
          << (points.empty() ? 0 : ((double) distance_calc_count) / 2 / points.size()) << endl;
     if(use_triangular_inequality_index && use_cache) {
@@ -911,7 +998,7 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::save(const vector<ClusterPoint<DataPoint<T
 
 template<class T, int Dim, size_t RStarMaxNodeElements>
 bool DBSCAN<T, Dim, RStarMaxNodeElements>::readData(const string &file_name, const string &dataset_name,
-                                                    vector<DataPoint<T, Dim>> &data)
+                                                    vector<pair<DataPoint<T, Dim>, vector<int>>> &data)
 {
     auto start = high_resolution_clock::now();
     this->dataset_name = dataset_name;
@@ -936,46 +1023,50 @@ bool DBSCAN<T, Dim, RStarMaxNodeElements>::readData(const string &file_name, con
         stringstream line_stream(line);
         string elem = "";
         vector<T> vals;
-        vals.reserve(Dim);
+        vals.reserve(Dim - 1);
+        int val_index = 0;
+        vector<int> ground_truth;
         while(getline(line_stream, elem, ',')) {
-            T val;
-            try {
-                if(is_same<T, float>::value) {
-                    val = stof(elem);
-                } else if(is_same<T, double>::value) {
-                    val = stod(elem);
-                } else if(is_same<T, long double>::value) {
-                    val = stold(elem);
-                } else if(is_same<T, int>::value) {
-                    val = stoi(elem);
-                } else if(is_same<T, long>::value) {
-                    val = stol(elem);
-                } else if(is_same<T, unsigned long>::value) {
-                    val = stoul(elem);
-                } else if(is_same<T, long long>::value) {
-                    val = stoll(elem);
-                } else if(is_same<T, unsigned long long>::value) {
-                    val = stoull(elem);
-                } else {
+            if(val_index < Dim) {
+                T val;
+                try {
+                    if(is_same<T, float>::value) {
+                        val = stof(elem);
+                    } else if(is_same<T, double>::value) {
+                        val = stod(elem);
+                    } else if(is_same<T, long double>::value) {
+                        val = stold(elem);
+                    } else if(is_same<T, int>::value) {
+                        val = stoi(elem);
+                    } else if(is_same<T, long>::value) {
+                        val = stol(elem);
+                    } else if(is_same<T, unsigned long>::value) {
+                        val = stoul(elem);
+                    } else if(is_same<T, long long>::value) {
+                        val = stoll(elem);
+                    } else if(is_same<T, unsigned long long>::value) {
+                        val = stoull(elem);
+                    } else {
+                        return false;
+                    }
+                } catch(const exception &e) {
+                    cerr << "Malformed input file." << endl;
                     return false;
                 }
-            } catch(const exception &e) {
-                cerr << "Malformed input file." << endl;
-                return false;
+                vals.push_back(val);
+            } else if(val_index >= Dim) {
+                ground_truth.push_back(stoi(elem));
             }
-            vals.push_back(val);
+            val_index++;
         }
         if(vals.empty()) {
             //just skip the line
         }
-        //remove the last value, which is just the ground truth
-        vals.pop_back();
-
-        if(vals.size() != Dim) {
+        if(ground_truth.empty()) {
+            cerr << "Malformed input file. No ground truth values." << endl;
             return false;
-        } else {
-            data.emplace_back(vals);
         }
+        data.emplace_back(DataPoint<T, Dim>(vals), ground_truth);
     }
     auto stop = high_resolution_clock::now();
     reading_input_file_time = stop - start;
@@ -1104,7 +1195,7 @@ bool DBSCAN<T, Dim, RStarMaxNodeElements>::guessEpsilon(vector<ClusterPoint<Data
     }
     //for now just the simplest implementation... it probably can be done faster.
     vector<T> distances(data.size());
-    const int number_of_neighbours = 4;
+    const int number_of_neighbours = Dim * 2;
     for(int i = 0; i < (int) data.size(); i++) {
         distances[i] = calcDistanceToKthClosest(data, i, number_of_neighbours);
     }
@@ -1129,10 +1220,10 @@ bool DBSCAN<T, Dim, RStarMaxNodeElements>::guessEpsilon(vector<ClusterPoint<Data
     }
     eps = distances[i] / scale + first;
     min_neighbours = number_of_neighbours;
-//    ofstream out("koko.csv");
-//    for(auto &distance : distances) {
-//        out << distance << endl;
-//    }
+    ofstream out("distances.csv");
+    for(auto &distance : distances) {
+        out << distance << endl;
+    }
     return true;
 }
 
