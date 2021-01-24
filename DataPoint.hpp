@@ -56,6 +56,10 @@ public:
         }
     }
 
+    DataPoint(T val) : data(vector<T>(Dim, 0)) {
+        data[0] = val;
+    }
+
     /**
      * @brief A version of the constructor for data point with only one dimension.
      * @tparam C Type of the data.

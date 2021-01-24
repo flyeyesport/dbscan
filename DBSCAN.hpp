@@ -200,6 +200,12 @@ protected:
     bool is_less_closer;
 
     /**
+     * @brief Counter of the number of calculations of the distances between points and the ti_center point when
+     * building a TI index.
+     */
+    int dist_calc_for_index_counter;
+
+    /**
      * @brief Internal method returning a set of points that are in the radius of <b>eps</b> from the given point.
      * The method may use different indexes to speed up searches. @see <b>use_rstar_tree</b> and
      * <b>use_triangular_inequality_index</b>. A distance function <b>distance_func</b> is used to calculate distances
@@ -520,11 +526,11 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::DBSCAN(int min_neighbours, double eps,
                                                         const DataPoint<T, Dim> &)> distance_func)
         : min_neighbours(min_neighbours), eps(eps), border_points_in_many_clusters(false),
           distance_func(distance_func), treat_zero_as_noise(false), normalize_values(false), calculate_z_score(false),
-          use_rstar_tree(false), use_triangular_inequality_index(false), ti_center(vector<T>(Dim, 1)),
+          use_rstar_tree(false), use_triangular_inequality_index(false), ti_center(1), // ti_center(vector<T>(Dim, 1)),
           reading_input_file_time(duration<double>::zero()),
           calc_dist_to_ti_center_time(duration<double>::zero()), calc_norm_time(duration<double>::zero()),
           sort_ti_time(duration<double>::zero()), calc_dist_time(duration<double>::zero()), save_counter(0),
-          use_cache(false), guess_epsilon(false), is_less_closer(true)
+          use_cache(false), guess_epsilon(false), is_less_closer(true), dist_calc_for_index_counter(0)
 {
     if(min_neighbours < 2) {
         throw out_of_range("Minimum number of neighbours must be larger than 1.");
@@ -602,13 +608,14 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::buildIndex(const vector<pair<DataPoint<T, 
             index.insert(make_pair(createRPoint(*(result[i].getData())), i));
         }
     } else if(use_triangular_inequality_index) {
+        dist_calc_for_index_counter = 0;
         for(auto &elem : result) {
             auto ti_center_dist_start = high_resolution_clock::now();
             T dist = distance_func(ti_center, *(elem.getData()));
             auto ti_center_dist_stop = high_resolution_clock::now();
             calc_dist_to_ti_center_time += ti_center_dist_stop - ti_center_dist_start;
             elem.setTriangularInequalityDistance(dist);
-            elem.distanceCalculated();
+            dist_calc_for_index_counter++;
         }
 
         auto sort_ti_start = high_resolution_clock::now();
@@ -951,6 +958,8 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::save(const vector<ClusterPoint<DataPoint<T
         distance_calc_count += point.getDistanceCalculationCount();
     }
 
+    distance_calc_count /= 2;
+
     stat << "algorithm used:\t\t\t\t\t\t\t\t\t" << method_name << endl
          << "with:" << endl
          << (use_rstar_tree ? " - R*-tree index\n" : "")
@@ -985,7 +994,7 @@ DBSCAN<T, Dim, RStarMaxNodeElements>::save(const vector<ClusterPoint<DataPoint<T
          << "Rand # all pairs:\t\t\t\t\t\t\t\t" << rand_all << endl
          << "Rand index:\t\t\t\t\t\t\t\t\t" << rand_index << endl
          << "avg # of calculations of distance/similarity of a point to other points:\t"
-         << (points.empty() ? 0 : ((double) distance_calc_count) / 2 / points.size()) << endl;
+         << (points.empty() ? 0 : ((double) distance_calc_count + dist_calc_for_index_counter) / points.size()) << endl;
     if(use_triangular_inequality_index && use_cache) {
         stat << "cache:" << endl
              << " - time used by cache:\t\t\t\t\t\t\t\t" << cache.time().count() << " seconds" << endl
